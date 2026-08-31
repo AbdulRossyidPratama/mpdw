@@ -1,0 +1,211 @@
+---
+title: "Tugas Praktikum: Regresi dan Penanganan Otokorelasi Sisaan"
+subtitle: "Metode Cochrane-Orcutt dan Hildreth-Lu"
+author: "Abdul Rossyid Pratama"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+library(lmtest)
+```
+
+# Pendahuluan
+
+Laporan ini melakukan pemodelan regresi terhadap dua data yang **dianggap sebagai data cross section**, kemudian memeriksa apakah terdapat otokorelasi pada sisaan model menggunakan plot sisaan dan uji Durbin-Watson. Jika ditemukan otokorelasi, dilakukan penanganan menggunakan metode **Cochrane-Orcutt** dan **Hildreth-Lu**.
+
+# Fungsi yang Digunakan
+
+```{r fungsi}
+cochrane_orcutt <- function(x, y, tol = 1e-6, max_iter = 100) {
+  model <- lm(y ~ x)
+  resid_e <- resid(model)
+  rho_old <- 0
+  for (i in 1:max_iter) {
+    n <- length(resid_e)
+    rho <- sum(resid_e[-1] * resid_e[-n]) / sum(resid_e[-n]^2)
+    y_star <- y[-1] - rho * y[-length(y)]
+    x_star <- x[-1] - rho * x[-length(x)]
+    fit_star <- lm(y_star ~ x_star)
+    b0 <- coef(fit_star)[1] / (1 - rho)
+    b1 <- coef(fit_star)[2]
+    resid_e <- y - (b0 + b1 * x)
+    if (abs(rho - rho_old) < tol) break
+    rho_old <- rho
+  }
+  list(rho = rho, b0 = as.numeric(b0), b1 = as.numeric(b1),
+       iterasi = i, dw_transformed = dwtest(fit_star)$statistic,
+       fit_transformed = fit_star)
+}
+
+hildreth_lu <- function(x, y, rho_seq = seq(-0.99, 0.99, by = 0.001)) {
+  best_sse <- Inf
+  best_rho <- NA
+  for (rho in rho_seq) {
+    y_star <- y[-1] - rho * y[-length(y)]
+    x_star <- x[-1] - rho * x[-length(x)]
+    fit <- lm(y_star ~ x_star)
+    sse <- sum(resid(fit)^2)
+    if (sse < best_sse) {
+      best_sse <- sse
+      best_rho <- rho
+    }
+  }
+  y_star <- y[-1] - best_rho * y[-length(y)]
+  x_star <- x[-1] - best_rho * x[-length(x)]
+  fit_best <- lm(y_star ~ x_star)
+  b0 <- coef(fit_best)[1] / (1 - best_rho)
+  b1 <- coef(fit_best)[2]
+  list(rho = best_rho, sse = best_sse, b0 = b0, b1 = b1,
+       dw_transformed = dwtest(fit_best)$statistic)
+}
+
+analisis_otokorelasi <- function(x, y, nama_x, nama_y) {
+  model <- lm(y ~ x)
+  dw <- dwtest(model)
+  co <- cochrane_orcutt(x, y)
+  hl <- hildreth_lu(x, y)
+  list(model = model, dw = dw, co = co, hl = hl)
+}
+```
+
+# Dataset 1: Market Share ~ Price
+
+## Data
+
+```{r data1}
+price <- c(0.97,0.95,0.99,0.91,0.98,0.90,0.89,0.86,0.85,0.82,
+           0.79,0.83,0.81,0.77,0.76,0.80,0.83,0.79,0.76,0.78)
+market_share <- c(3.63,4.20,3.33,4.54,2.89,4.87,4.90,5.29,6.18,7.20,
+                   7.25,6.09,6.80,8.65,8.43,8.29,7.18,7.90,8.45,8.23)
+hasil1 <- analisis_otokorelasi(price, market_share, "Price", "Market Share")
+```
+
+## Model Regresi OLS Awal
+
+```{r ols1}
+summary(hasil1$model)
+```
+
+## Plot Sisaan
+
+```{r plot1, fig.width=7, fig.height=4}
+plot(resid(hasil1$model), type = "o", pch = 19,
+     main = "Plot Sisaan: Market Share ~ Price",
+     xlab = "Periode/Urutan", ylab = "Sisaan")
+abline(h = 0, col = "red", lty = 2)
+```
+
+Sisaan pada plot di atas tidak menyebar acak, terlihat pola pergerakan yang cenderung berkelompok — mengindikasikan adanya otokorelasi.
+
+## Uji Durbin-Watson
+
+```{r dw1}
+hasil1$dw
+```
+
+Dengan n = 20 dan k = 1 (α = 0.05), nilai DW = `r round(hasil1$dw$statistic, 3)` berada **di bawah dL** pada tabel Durbin-Watson, sehingga disimpulkan **terdapat otokorelasi positif** pada sisaan model.
+
+## Penanganan: Cochrane-Orcutt
+
+```{r co1}
+cat("rho          :", hasil1$co$rho, "\n")
+cat("Iterasi      :", hasil1$co$iterasi, "\n")
+cat("Model akhir  : Market Share =", round(hasil1$co$b0, 4), "+", round(hasil1$co$b1, 4), "* Price\n")
+cat("DW (transformed):", hasil1$co$dw_transformed, "\n")
+```
+
+## Penanganan: Hildreth-Lu
+
+```{r hl1}
+cat("rho optimum  :", hasil1$hl$rho, "\n")
+cat("SSE minimum  :", round(hasil1$hl$sse, 4), "\n")
+cat("Model akhir  : Market Share =", round(hasil1$hl$b0, 4), "+", round(hasil1$hl$b1, 4), "* Price\n")
+cat("DW (transformed):", hasil1$hl$dw_transformed, "\n")
+```
+
+## Kesimpulan Dataset 1
+
+Kedua metode penanganan menghasilkan nilai ρ yang hampir identik (≈ `r round(hasil1$co$rho, 3)`) dengan model akhir yang serupa. Setelah koreksi, nilai DW naik dari `r round(hasil1$dw$statistic, 3)` menjadi sekitar `r round(hasil1$co$dw_transformed, 3)`, mendekati 2 — menandakan otokorelasi pada sisaan berhasil ditangani.
+
+---
+
+# Dataset 2: Sales ~ Advertising
+
+## Data
+
+```{r data2}
+advertising <- c(9.4,9.6,10,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                  13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                  15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                  18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+hasil2 <- analisis_otokorelasi(advertising, sales, "Advertising", "Sales")
+```
+
+## Model Regresi OLS Awal
+
+```{r ols2}
+summary(hasil2$model)
+```
+
+## Plot Sisaan
+
+```{r plot2, fig.width=7, fig.height=4}
+plot(resid(hasil2$model), type = "o", pch = 19,
+     main = "Plot Sisaan: Sales ~ Advertising",
+     xlab = "Periode/Urutan", ylab = "Sisaan")
+abline(h = 0, col = "red", lty = 2)
+```
+
+Plot sisaan menunjukkan pola gelombang yang jelas (naik kemudian turun secara bertahap), bukan sebaran acak — indikasi kuat adanya otokorelasi.
+
+## Uji Durbin-Watson
+
+```{r dw2}
+hasil2$dw
+```
+
+Dengan n = 40 dan k = 1 (α = 0.05), nilai DW = `r round(hasil2$dw$statistic, 3)` jauh **di bawah dL**, sehingga disimpulkan **terdapat otokorelasi positif yang kuat** pada sisaan model.
+
+## Penanganan: Cochrane-Orcutt
+
+```{r co2}
+cat("rho          :", hasil2$co$rho, "\n")
+cat("Iterasi      :", hasil2$co$iterasi, "\n")
+cat("Model akhir  : Sales =", round(hasil2$co$b0, 4), "+", round(hasil2$co$b1, 4), "* Advertising\n")
+cat("DW (transformed):", hasil2$co$dw_transformed, "\n")
+```
+
+## Penanganan: Hildreth-Lu
+
+```{r hl2}
+cat("rho optimum  :", hasil2$hl$rho, "\n")
+cat("SSE minimum  :", round(hasil2$hl$sse, 4), "\n")
+cat("Model akhir  : Sales =", round(hasil2$hl$b0, 4), "+", round(hasil2$hl$b1, 4), "* Advertising\n")
+cat("DW (transformed):", hasil2$hl$dw_transformed, "\n")
+```
+
+## Kesimpulan Dataset 2
+
+Kedua metode kembali menghasilkan ρ yang sama (≈ `r round(hasil2$co$rho, 3)`). Setelah koreksi, DW naik dari `r round(hasil2$dw$statistic, 3)` menjadi sekitar `r round(hasil2$co$dw_transformed, 3)`, sudah berada di atas dU — otokorelasi berhasil ditangani.
+
+---
+
+# Ringkasan Keseluruhan
+
+| Dataset | DW awal | Kesimpulan | ρ (CO & HL) | DW setelah koreksi |
+|---|---|---|---|---|
+| Market Share ~ Price | `r round(hasil1$dw$statistic,3)` | Ada otokorelasi (DW < dL) | `r round(hasil1$co$rho,3)` | `r round(hasil1$co$dw_transformed,3)` |
+| Sales ~ Advertising | `r round(hasil2$dw$statistic,3)` | Ada otokorelasi kuat (DW << dL) | `r round(hasil2$co$rho,3)` | `r round(hasil2$co$dw_transformed,3)` |
+
+**Catatan:** Nilai kritis dL dan dU perlu dicek langsung dari tabel Durbin-Watson sesuai n dan k = 1 pada referensi praktikum yang digunakan.

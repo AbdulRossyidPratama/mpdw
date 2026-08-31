@@ -1,0 +1,156 @@
+---
+title: "Perbandingan Metode Pemulusan: SES vs DES vs Holt-Winters"
+subtitle: "Studi Kasus: Beban Listrik Jerman 2025"
+author: "Abdul Rossyid Pratama"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    df_print: paged
+knit: (function(input, ...) { dir.create("Pertemuan-2", showWarnings = FALSE); rmarkdown::render(input, output_file = "Pertemuan-2/Tugas-Pertemuan-2.html") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(readxl)
+library(forecast)
+library(ggplot2)
+library(writexl)
+library(tidyr)
+```
+
+## Pendahuluan
+
+Laporan ini membandingkan tiga metode pemulusan eksponensial — **SES**, **DES (Holt)**, dan **Holt-Winters** — pada data beban listrik harian Jerman tahun 2025, untuk menentukan metode terbaik berdasarkan metrik akurasi (SSE, MSE, RMSE, MAPE).
+
+## 1. Membaca Data
+
+```{r baca-data}
+df <- read_excel("Beban_Listrik_Jerman_2025.xlsx")
+df$Tanggal <- as.Date(df$Tanggal)
+
+y <- ts(df$`Beban Listrik (MW)`, frequency = 7)
+
+head(df)
+```
+
+## 2. Fitting Model
+
+```{r fitting}
+# a. SES -> tanpa trend, tanpa musiman
+model_ses <- HoltWinters(y, beta = FALSE, gamma = FALSE)
+
+# b. DES (Holt) -> trend saja, tanpa musiman
+model_des <- HoltWinters(y, gamma = FALSE)
+
+# c. Holt-Winters -> trend + musiman aditif
+model_hw <- HoltWinters(y, seasonal = "additive")
+```
+
+### Parameter SES
+```{r param-ses}
+model_ses
+```
+
+### Parameter DES
+```{r param-des}
+model_des
+```
+
+### Parameter Holt-Winters
+```{r param-hw}
+model_hw
+```
+
+## 3. Menyamakan Panjang Data & Menghitung Nilai Pemulusan
+
+```{r samakan-panjang}
+n_awal <- length(y) - length(fitted(model_hw)[, "xhat"])
+df_hasil <- df[(n_awal + 1):nrow(df), ]
+
+fitted_ses <- as.numeric(fitted(model_ses)[, "xhat"])
+fitted_des <- as.numeric(fitted(model_des)[, "xhat"])
+fitted_hw  <- as.numeric(fitted(model_hw)[, "xhat"])
+
+n_target <- nrow(df_hasil)
+df_hasil$SES <- tail(fitted_ses, n_target)
+df_hasil$DES <- tail(fitted_des, n_target)
+df_hasil$Holt_Winters <- tail(fitted_hw, n_target)
+
+head(df_hasil)
+```
+
+## 4. Perbandingan Metrik Akurasi
+
+```{r metrik}
+hitung_metrik <- function(aktual, prediksi) {
+  resid <- aktual - prediksi
+  sse <- sum(resid^2)
+  mse <- mean(resid^2)
+  rmse <- sqrt(mse)
+  mape <- mean(abs(resid / aktual)) * 100
+  data.frame(SSE = sse, MSE = mse, RMSE = rmse, MAPE = mape)
+}
+
+aktual <- df_hasil$`Beban Listrik (MW)`
+metrik_ses <- hitung_metrik(aktual, df_hasil$SES)
+metrik_des <- hitung_metrik(aktual, df_hasil$DES)
+metrik_hw  <- hitung_metrik(aktual, df_hasil$Holt_Winters)
+
+tabel_metrik <- rbind(
+  cbind(Metode = "SES", metrik_ses),
+  cbind(Metode = "DES", metrik_des),
+  cbind(Metode = "Holt-Winters", metrik_hw)
+)
+tabel_metrik[, 2:5] <- round(tabel_metrik[, 2:5], 2)
+
+knitr::kable(tabel_metrik, caption = "Perbandingan Metrik Akurasi Ketiga Metode")
+```
+
+```{r metode-terbaik, echo=FALSE}
+metode_terbaik <- tabel_metrik$Metode[which.min(tabel_metrik$MAPE)]
+cat("Metode terbaik berdasarkan MAPE terendah:", metode_terbaik)
+```
+
+## 5. Visualisasi Perbandingan
+
+```{r plot, fig.width=10, fig.height=10}
+df_long <- pivot_longer(
+  df_hasil,
+  cols = c("SES", "DES", "Holt_Winters"),
+  names_to = "Metode",
+  values_to = "Nilai"
+)
+
+p <- ggplot() +
+  geom_line(data = df_hasil, aes(x = Tanggal, y = `Beban Listrik (MW)`),
+            color = "#4C72B0", linewidth = 0.4, alpha = 0.6) +
+  geom_line(data = df_long, aes(x = Tanggal, y = Nilai, color = Metode), linewidth = 0.6) +
+  facet_wrap(~Metode, ncol = 1, scales = "free_y") +
+  labs(title = "Perbandingan Metode Pemulusan: SES vs DES vs Holt-Winters",
+       x = "Tanggal", y = "Beban Listrik (MW)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p
+```
+
+## 6. Kesimpulan
+
+Berdasarkan hasil perbandingan metrik akurasi di atas, metode **`r metode_terbaik`** memberikan hasil pemulusan terbaik untuk data beban listrik harian Jerman 2025.
+
+Data beban listrik harian memiliki pola musiman mingguan yang jelas (beban lebih rendah di akhir pekan) serta pola musiman tahunan (naik saat musim dingin, turun saat musim panas). SES hanya memodelkan level data, dan DES menambahkan komponen tren, namun keduanya tidak memodelkan musiman sama sekali sehingga tidak mampu mengikuti pola berulang tersebut secara struktural. Holt-Winters menambahkan komponen musiman secara eksplisit (periode 7 hari), sehingga menghasilkan RMSE dan MAPE yang jauh lebih rendah dibanding SES maupun DES.
+
+## 7. Simpan Hasil ke Excel
+
+```{r simpan-excel}
+write_xlsx(
+  list(
+    "Data & Hasil" = df_hasil,
+    "Perbandingan Metrik" = tabel_metrik
+  ),
+  "Perbandingan_Metode_Pemulusan_R.xlsx"
+)
+```

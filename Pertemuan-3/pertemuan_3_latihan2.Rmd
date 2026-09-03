@@ -1,0 +1,288 @@
+---
+title: "Pertemuan 3 - Model Distributed Lag, Koyck, dan ARDL"
+author: "Abdul Rossyid Pratama"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Pendahuluan
+
+Dokumen ini membahas pemodelan **distributed lag** untuk data penjualan (*sales*) terhadap biaya iklan (*advertising*) selama 40 periode (1975-2014). Beberapa model yang dibandingkan adalah:
+
+- **Model Koyck** — model distributed lag dengan bobot lag menurun secara geometrik
+- **Model DLM (Distributed Lag Model)** — dengan orde lag tetap, baik ditentukan manual maupun otomatis
+- **Model ARDL (Autoregressive Distributed Lag)** — menggabungkan lag dari variabel dependen dan independen
+
+```{r library}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+# Data
+
+Data yang digunakan adalah penjualan (Sales) terhadap biaya iklan (Advertising) tahunan dari 1975 sampai 2014.
+
+```{r import-data}
+data <- rio::import("C:/Users/HYPE AMD/Downloads/latihan2_sales_advertising.csv")
+str(data)
+```
+
+Data dibagi menjadi data latih (train, 30 periode pertama) dan data uji (test, 10 periode terakhir), lalu diubah ke format *time series*.
+
+```{r split-data}
+#SPLIT DATA
+train<-data[1:30,]
+test<-data[31:40,]
+
+#data time series
+train.ts<-ts(train)
+test.ts<-ts(test)
+data.ts<-ts(data)
+```
+
+# Model Koyck
+
+Model Koyck mengasumsikan pengaruh variabel independen terhadap dependen menurun secara geometrik seiring bertambahnya lag, sehingga cukup diwakili oleh satu lag dari variabel dependen.
+
+```{r model-koyck}
+model.koyck <- koyckDlm(x = as.numeric(train$Advertising), y = as.numeric(train$Sales))
+summary(model.koyck)
+
+AIC(model.koyck)
+BIC(model.koyck)
+```
+
+## Peramalan dan Akurasi Model Koyck
+
+```{r fore-koyck}
+fore.koyck <- forecast(model = model.koyck, x = as.numeric(test$Advertising), h = 10)
+fore.koyck
+
+mape.koyck <- MAPE(fore.koyck$forecasts, test$Sales)
+mape.koyck #data test
+
+#akurasi data training
+GoF(model.koyck)
+```
+
+# Model DLM (Distributed Lag Model)
+
+## DLM dengan Lag Manual (q = 2)
+
+Model DLM dengan orde lag yang ditentukan secara manual, yaitu q = 2.
+
+```{r model-dlm}
+model.dlm <- dlm(x = as.numeric(train$Advertising), y = as.numeric(train$Sales), q = 2)
+summary(model.dlm)
+AIC(model.dlm)
+BIC(model.dlm)
+```
+
+## Peramalan dan Akurasi DLM (q = 2)
+
+```{r fore-dlm}
+fore.dlm <- forecast(model = model.dlm, x = as.numeric(test$Advertising), h = 10)
+fore.dlm
+
+mape.dlm <- MAPE(fore.dlm$forecasts, test$Sales)
+mape.dlm
+
+#akurasi data training
+GoF(model.dlm)
+```
+
+## Penentuan Lag Optimum DLM
+
+Untuk mendapatkan orde lag terbaik, dilakukan pencarian otomatis menggunakan kriteria AIC pada rentang lag 1 sampai 10.
+
+```{r lag-optimum-dlm}
+finiteDLMauto(formula = Sales ~ Advertising,
+              data = data.frame(train), q.min = 1, q.max = 10,
+              model.type = "dlm", error.type = "AIC", trace = TRUE)
+```
+
+## DLM dengan Lag Optimum (q = 6)
+
+Berdasarkan hasil pencarian di atas, lag optimum yang dipilih adalah q = 6.
+
+```{r model-dlm2}
+model.dlm2 <- dlm(x = as.numeric(train$Advertising), y = as.numeric(train$Sales), q = 6)
+summary(model.dlm2)
+AIC(model.dlm2)
+BIC(model.dlm2)
+```
+
+## Peramalan dan Akurasi DLM (q = 6)
+
+```{r fore-dlm2}
+fore.dlm2 <- forecast(model = model.dlm2, x = as.numeric(test$Advertising), h = 10)
+
+#akurasi data test
+mape.dlm2 <- MAPE(fore.dlm2$forecasts, test$Sales)
+mape.dlm2
+
+#akurasi data training
+GoF(model.dlm2)
+```
+
+# Model ARDL (Autoregressive Distributed Lag)
+
+Model ARDL menggabungkan lag dari variabel independen (p) dan variabel dependen (q). Berikut dua cara pemanggilan `ardlDlm()` yang menghasilkan model setara: menggunakan argumen `x`/`y` langsung, dan menggunakan notasi `formula`.
+
+```{r model-ardl}
+model.ardl <- ardlDlm(x = as.numeric(train$Advertising), y = as.numeric(train$Sales), p = 1, q = 1)
+summary(model.ardl)
+AIC(model.ardl)
+BIC(model.ardl)
+
+model.ardl <- ardlDlm(formula = Sales ~ Advertising, 
+                      data = train, p = 1, q = 1)
+summary(model.ardl)
+AIC(model.ardl)
+BIC(model.ardl)
+```
+
+## Peramalan dan Akurasi ARDL
+
+```{r fore-ardl}
+fore.ardl <- forecast(model = model.ardl, x = as.numeric(test$Advertising), h = 10)
+fore.ardl
+
+mape.ardl <- MAPE(fore.ardl$forecasts, test$Sales)
+mape.ardl
+
+#akurasi data training
+GoF(model.ardl)
+```
+
+## Penentuan Lag Optimum ARDL
+
+Pencarian kombinasi orde p (lag X) dan q (lag Y) terbaik dilakukan dengan `ardlBoundOrders()` berdasarkan kriteria AIC.
+
+```{r lag-optimum-ardl}
+model.ardl.opt <- ardlBoundOrders(data = data.frame(data), ic = "AIC", 
+                                  formula = Sales ~ Advertising)
+model.ardl.opt
+```
+
+Kombinasi p dan q dengan AIC terkecil diekstrak sebagai berikut.
+
+```{r p-q-optimum}
+min_p=c()
+for(i in 1:6){
+  min_p[i]=min(model.ardl.opt$Stat.table[[i]])
+}
+q_opt=which(min_p==min(min_p, na.rm = TRUE))
+p_opt=which(model.ardl.opt$Stat.table[[q_opt]] == 
+              min(model.ardl.opt$Stat.table[[q_opt]], na.rm = TRUE))
+data.frame("q_optimum" = q_opt, "p_optimum" = p_opt, 
+           "AIC"=model.ardl.opt$min.Stat)
+```
+
+# Verifikasi dengan `dynlm()`
+
+Model-model di atas dapat direplikasi menggunakan fungsi `dynlm()` sebagai pembanding, dengan notasi `L()` untuk menyatakan lag.
+
+```{r dynlm-models}
+#sama dengan model dlm q=1
+cons_lm1 <- dynlm(Sales ~ Advertising+L(Advertising), data = train.ts)
+
+#sama dengan model ardl p=1 q=0
+cons_lm2 <- dynlm(Sales ~ Advertising+L(Sales), data = train.ts)
+
+#sama dengan ardl p=1 q=1
+cons_lm3 <- dynlm(Sales ~ Advertising+L(Advertising)+L(Sales), data = train.ts)
+
+#sama dengan dlm p=2
+cons_lm4 <- dynlm(Sales ~ Advertising+L(Advertising)+L(Advertising,2), data = train.ts)
+
+summary(cons_lm1)
+summary(cons_lm2)
+summary(cons_lm3)
+summary(cons_lm4)
+
+deviance(cons_lm1)
+deviance(cons_lm2)
+deviance(cons_lm3)
+deviance(cons_lm4)
+```
+
+## Uji Encompassing
+
+Uji ini digunakan untuk membandingkan dua model bersarang (*non-nested*), untuk melihat apakah satu model dapat "mencakup" informasi dari model lainnya.
+
+```{r encompassing-test}
+#uji model
+if(require("lmtest")) encomptest(cons_lm1, cons_lm2)
+```
+
+## Uji Asumsi Klasik
+
+Beberapa uji asumsi dilakukan pada setiap model `dynlm` di atas: **Durbin-Watson** untuk autokorelasi, **Breusch-Pagan** untuk homoskedastisitas, dan **Shapiro-Wilk** untuk normalitas residual.
+
+```{r asumsi-klasik}
+#durbin watson
+dwtest(cons_lm1)
+dwtest(cons_lm2)
+dwtest(cons_lm3)
+dwtest(cons_lm4)
+
+bptest(cons_lm1)
+bptest(cons_lm2)
+bptest(cons_lm3)
+bptest(cons_lm4)
+
+shapiro.test(residuals(cons_lm1))
+shapiro.test(residuals(cons_lm2))
+shapiro.test(residuals(cons_lm3))
+shapiro.test(residuals(cons_lm4))
+```
+
+# Perbandingan Akurasi Model
+
+Ringkasan nilai MAPE dari keempat model pada data uji, untuk melihat model mana yang paling akurat memprediksi penjualan.
+
+```{r tabel-akurasi}
+akurasi <- matrix(c(mape.koyck, mape.dlm, mape.dlm2, mape.ardl))
+row.names(akurasi)<- c("Koyck","DLM 1","DLM 2","Autoregressive")
+colnames(akurasi) <- c("MAPE")
+akurasi
+```
+
+## Visualisasi Perbandingan Hasil Peramalan
+
+Grafik berikut membandingkan nilai aktual penjualan pada data uji dengan hasil peramalan dari masing-masing model.
+
+```{r plot-perbandingan, fig.width=7, fig.height=5}
+par(mfrow=c(1,1))  # atur layout grafik tunggal
+
+# plot data aktual
+plot(test$Advertising, test$Sales, type="b", col="black", ylim=c(15,25))
+
+# tambahkan garis ramalan dari masing-masing model
+points(test$Advertising, fore.koyck$forecasts, col="red");   lines(test$Advertising, fore.koyck$forecasts, col="red")
+points(test$Advertising, fore.dlm$forecasts, col="blue");    lines(test$Advertising, fore.dlm$forecasts, col="blue")
+points(test$Advertising, fore.dlm2$forecasts, col="orange"); lines(test$Advertising, fore.dlm2$forecasts, col="orange")
+points(test$Advertising, fore.ardl$forecasts, col="green");  lines(test$Advertising, fore.ardl$forecasts, col="green")
+
+# legenda model
+legend("topleft",
+       c("Aktual", "Koyck","DLM 1","DLM 2", "Autoregressive"),
+       lty=1, col=c("black","red","blue","orange","green"), cex=0.8)
+```
+
+# Kesimpulan
+
+Berdasarkan nilai MAPE pada data uji, model dengan nilai MAPE terkecil dianggap sebagai model dengan performa peramalan terbaik untuk data penjualan terhadap biaya iklan ini. Hasil uji asumsi klasik (Durbin-Watson, Breusch-Pagan, dan Shapiro-Wilk) pada model `dynlm` pembanding juga perlu diperhatikan untuk memastikan model yang dipilih memenuhi asumsi regresi yang layak.
